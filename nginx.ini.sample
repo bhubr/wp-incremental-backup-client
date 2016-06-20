@@ -1,0 +1,3 @@
+doc_root = /your/nginx/document/root
+nginx_sites = /your/nginx/conf_dir/sites-available
+nginx_conf_dir = /your/nginx/conf_dir

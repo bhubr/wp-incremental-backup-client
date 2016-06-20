@@ -1,0 +1,8 @@
+[mydomain.com]
+username = admin
+password = "admin.pwd.with.special.chars?"
+url = http://www.mydomain.com/
+exlclude = *file/exclusion/patterns*,another/pattern/*,*.zip
+; set login_url if you use a redirection plugin to disable wp-login.php
+; this is optional, if not set wp-login.php will be used
+;login_url = my-login-relative-url
