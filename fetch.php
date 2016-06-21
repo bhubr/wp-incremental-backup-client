@@ -1,15 +1,46 @@
 <?php
-
+define('BACKUP_ROOT', '/Volumes/Backup/Geek/Sites');
+define('KEEPASS_FILE', '/Volumes/NO NAME/sites.kdbx');
+define('KEEPASS_DBID', 'sites');
+define('KEEPASS_DEBUG', false);
 define('WPIB_CLIENT_DEBUG_MODE', true);
 define('WPIB_CLIENT_DEBUG_LEN', 15);
-define('BACKUP_ROOT', '/Volumes/Backup/Geek/Sites');
 
 require realpath(__DIR__ . '/inc/constants.php');
+require_once "vendor/autoload.php";
+use \KeePassPHP\KeePassPHP as KeePassPHP;
+use \KeePassPHP\ProtectedXMLReader as ProtectedXMLReader;
 
 $global_fh = null;
 
 
 
+// http://stackoverflow.com/questions/187736/command-line-password-prompt-in-php
+function prompt_silent($prompt = "Enter Password:") {
+  if (preg_match('/^win/i', PHP_OS)) {
+    $vbscript = sys_get_temp_dir() . 'prompt_password.vbs';
+    file_put_contents(
+      $vbscript, 'wscript.echo(InputBox("'
+      . addslashes($prompt)
+      . '", "", "password here"))');
+    $command = "cscript //nologo " . escapeshellarg($vbscript);
+    $password = rtrim(shell_exec($command));
+    unlink($vbscript);
+    return $password;
+  } else {
+    $command = "/usr/bin/env bash -c 'echo OK'";
+    if (rtrim(shell_exec($command)) !== 'OK') {
+      trigger_error("Can't invoke bash");
+      return;
+    }
+    $command = "/usr/bin/env bash -c 'read -s -p \""
+      . addslashes($prompt)
+      . "\" mypassword && echo \$mypassword'";
+    $password = rtrim(shell_exec($command));
+    echo "\n";
+    return $password;
+  }
+}
 
 
 
@@ -52,13 +83,85 @@ class T1z_WP_Incremental_Backup_Client {
 	private $dest_dir;
 	private $mode = 'normal';
 
+	private $keepass_db;
+
+	private $keepass_map = [];
+
+	private $keepass_datadir = __DIR__ . "/data";
+
 	/**
 	 * Constructor: read ini file and setup cURL
 	 */
 	public function __construct() {
 		// if(! is_dir('BACKUP_ROOT')) die(BACKUP_ROOT . " could not be found\n");
+		$this->setup_keepass();
 		$this->cookie = tempnam ("/tmp", "CURLCOOKIE");
 		$this->read_config();
+	}
+
+	private function setup_keepass() {
+
+		if(!KeePassPHP::init($this->keepass_datadir, KEEPASS_DEBUG)) {
+			die("KeePassPHP Initialization failed.");
+		}
+
+		$pwd = prompt_silent();
+		$kphpdb_pwd = '';
+		if(empty($kphpdb_pwd)) {
+			$kphpdb_pwd = KeePassPHP::extractHalfPassword($pwd);
+		}
+
+		if(KeePassPHP::existsKphpDB(KEEPASS_DBID))
+		{
+			if(!KeePassPHP::removeDatabase(KEEPASS_DBID, $kphpdb_pwd))
+				printf("Database '" . KEEPASS_DBID .
+					"' already exists and cannot be deleted.");
+		}
+
+
+		if(!KeePassPHP::addDatabaseFromFiles(KEEPASS_DBID, KEEPASS_FILE, $pwd, '', $kphpdb_pwd, true)) {
+			die("Cannot add database '" . KEEPASS_DBID . "'.");
+		}
+				
+		$this->keepass_db = KeePassPHP::getDatabase(KEEPASS_DBID, $kphpdb_pwd, $pwd, true);
+		if($this->keepass_db == null) {
+			die("Cannot get database '" . KEEPASS_DBID . "'.");
+		}
+		$groups = $this->keepass_db->getGroups();
+		$root = $groups[0];
+		$xmlReader = new ProtectedXMLReader;
+		foreach($root->entries as $entry) {
+			$this->keypass_map[$entry->title] = [
+				'uuid' => $entry->uuid,
+				'user' => $entry->username,
+				'url'  => $entry->url
+			];
+		}
+
+	}
+
+	private function get_credentials($site) {
+		$entry = $this->keypass_map[$site];
+		$user = $entry['user'];
+		$pwd = $this->keepass_db->getPassword($entry['uuid']);
+		if (empty($user)) {
+			die("Empty username for site [$site] !\n");
+		}
+		if (empty($pwd)) {
+			die("Empty password for site [$site] !\n");
+		}
+		return [
+			'user' => $user,
+			'pass' => $pwd
+		];
+	}
+
+	private function get_url($site) {
+		$url = $this->keypass_map[$site]['url'];
+		if (empty($url)) {
+			die("Empty url for site [$site] !\n");
+		}
+		return $url;
 	}
 
 	/**
@@ -103,8 +206,8 @@ class T1z_WP_Incremental_Backup_Client {
 			// if (! $this->ch_download) { die ("cURL init failed for 1st handle!!"); }
 			printf ("\n\n *******   Begin process for site: %25s   ********\n", $site);
 
-			if (substr($config['url'], -1) !== '/') {
-				$config['url'] .= '/';
+			if (substr($this->get_url($site), -1) !== '/') {
+				$this->keypass_map[$site]['url'] .= '/';
 			}
 
 			$this->dest_dir_prefix = $this->get_destination_dir($site);
@@ -116,13 +219,14 @@ class T1z_WP_Incremental_Backup_Client {
 			// 	
 				
 			// }
-			$this->login_to_wordpress($this->ch, $config);
+			$this->login_to_wordpress($config, $site);
 
 			$this->setup_curl_for_json();
 			// die('ok login');
 			$this->post_generate_backup($config, $site);
 			$this->concat_backups($config, $site);
 			curl_close($this->ch);
+			exec("rm -rf {$this->keepass_datadir}", $out, $ret);
 		}
 	}
 
@@ -142,29 +246,30 @@ class T1z_WP_Incremental_Backup_Client {
 	/**
 	 * GET WordPress login page
 	 */
-	private function get_login($ch, $config) {
+	private function get_login($config, $site) {
 		var_dump($config);
-		$this->login_url = $config['url'] . (array_key_exists('login_url', $config) ? $config['login_url'] : 'wp-login.php');
+		$this->login_url = $this->get_url($site) . (array_key_exists('login_url', $config) ? $config['login_url'] : 'wp-login.php');
 		printf("* GET login page [url = %s]\n", $this->login_url);
-		curl_setopt ($ch, CURLOPT_URL,  $this->login_url);
-		curl_exec ($ch);
+		curl_setopt($this->ch, CURLOPT_URL,  $this->login_url);
+		curl_exec($this->ch);
 		// $response = $this->send_request();
-		if (! $this->response) die("[get_login] cURL error: " . curl_error($ch) . "\n");
+		if (! $this->response) die("[get_login] cURL error: " . curl_error($this->ch) . "\n");
 		if (WPIB_CLIENT_DEBUG_MODE) $this->log('GET login page', $this->response);
 	}
 
 	/**
 	 * POST request to sign in to WordPress
 	 */
-	private function post_login($ch, $config) {
-		$postdata = "log=". $config['username'] ."&pwd=". urlencode($config['password']) ."&wp-submit=Se+connecter&redirect_to=". $config['url'] ."wp-admin/&testcookie=1";
+	private function post_login($config, $site) {
+		$credentials = $this->get_credentials($site);
+		$postdata = "log=". $credentials['user'] ."&pwd=". urlencode($credentials['pass']) ."&wp-submit=Se+connecter&redirect_to=". $this->get_url($site) ."wp-admin/&testcookie=1";
 		printf("\n\n * POST login to %\n", $this->login_url);
 
 		// $html_response = $this->send_request();
 
-		curl_setopt ($ch, CURLOPT_POSTFIELDS, $postdata);
-		curl_setopt ($ch, CURLOPT_POST, 1);
-		curl_exec ($ch);
+		curl_setopt($this->ch, CURLOPT_POSTFIELDS, $postdata);
+		curl_setopt($this->ch, CURLOPT_POST, 1);
+		curl_exec($this->ch);
 		// $response = $this->send_request();
 		$lines = explode("\n", $this->response);
 		if (count($lines) < 2) {
@@ -178,21 +283,21 @@ class T1z_WP_Incremental_Backup_Client {
 			var_dump($lines);
 			// exit;
 		}
-		if (! $this->response) die("[post_login] cURL error: " . curl_error($ch) . "\n");
+		if (! $this->response) die("[post_login] cURL error: " . curl_error($this->ch) . "\n");
 		if (WPIB_CLIENT_DEBUG_MODE) $this->log('POST login credentials', $this->response);
 	}
 
 	/**
 	 * GET WordPress admin page
 	 */
-	private function get_admin($config) {
-		curl_setopt ($this->ch, CURLOPT_POST, 0);
-		curl_setopt ($this->ch, CURLOPT_POSTFIELDS, "");
-		curl_setopt ($this->ch, CURLOPT_URL, $config['url'] . 'wp-admin/');
-		// $response = curl_exec ($this->ch);
-		if (! $response) die("[get_login] cURL error: " . curl_error($this->ch) . "\n");
-		if (WPIB_CLIENT_DEBUG_MODE) $this->log('GET login page', $response);
-	}
+	// private function get_admin($config, $site) {
+	// 	curl_setopt($this->ch, CURLOPT_POST, 0);
+	// 	curl_setopt($this->ch, CURLOPT_POSTFIELDS, "");
+	// 	curl_setopt($this->ch, CURLOPT_URL, $this->get_url($site) . 'wp-admin/');
+	// 	// $response = curl_exec ($this->ch);
+	// 	if (! $response) die("[get_login] cURL error: " . curl_error($this->ch) . "\n");
+	// 	if (WPIB_CLIENT_DEBUG_MODE) $this->log('GET login page', $response);
+	// }
 
 	private function check_request_response($data) {
 
@@ -307,9 +412,9 @@ echo $this->mode . "\n";
 	}
 
 
-	private function download_and_check($config, $file, $dest) {
+	private function download_and_check($site, $file, $dest) {
 		global $global_fh;
-		$check_md5_url = $config['url'] . "wp-admin/admin-ajax.php?action=wpib_check_md5";
+		$check_md5_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_check_md5";
 		$destination = $this->dest_dir . DIRECTORY_SEPARATOR . $file;
 // die($destination);
 		echo "Preparing download for $file => $destination\n";
@@ -317,7 +422,7 @@ echo $this->mode . "\n";
 		// $ch = $this->setup_curl();
 
 		// $this->login_to_wordpress($this->ch_download, $config);
-		curl_setopt ($this->ch, CURLOPT_URL, $config['url'] . "wp-admin/admin-ajax.php?action=wpib_download&filename=$file");
+		curl_setopt ($this->ch, CURLOPT_URL, $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_download&filename=$file");
 echo "setup for download\n";
 		$global_fh = fopen($destination, "w+");
 		if (!$global_fh) die("could not open $destination\n");
@@ -372,10 +477,10 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 		// if (!is_dir($wp_expanded_dir)) mkdir($wp_expanded_dir);
 
 		// global $global_fh;
-		$download_url = $config['url'] . "wp-admin/admin-ajax.php?action=wpib_download";
+		$download_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_download";
 		$list_url = $download_url . "&list=1";
 		
-		$gen_url = $config['url'] . "wp-admin/admin-ajax.php?action=wpib_generate&step=build_archives";
+		$gen_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_generate&step=build_archives";
 		if(isset($config['php_path'])) $gen_url .= '&php_path=' . urlencode($config['php_path']);
 		// printf(" * Start step %5s", $step);
 		// for ($idx_sub = 0 ; $idx_sub < $num_substeps ; $idx_sub++)  {
@@ -414,7 +519,7 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 
 			$file = basename(array_shift($files));
 			echo "Downloading arc idx: $arc_idx $file\n";
-			$this->download_and_check($config, $file, 'files');
+			$this->download_and_check($site, $file, 'files');
 
 
 			printf("%d/%d DONE with file %s\n", $arc_idx, $this->num_archives, $file);
@@ -432,8 +537,8 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 		curl_setopt ($this->ch, CURLOPT_POSTFIELDS, "");
 
 		// base URL (step param will be appended later)
-		$gen_url = $config['url'] . "wp-admin/admin-ajax.php?action=wpib_generate";
-		$check_url = $config['url'] . "wp-admin/admin-ajax.php?action=wpib_check_progress";
+		$gen_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_generate";
+		$check_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_check_progress";
 		
 
 		// various steps of process
@@ -485,7 +590,7 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 			}
 
 			if($step === 'dump_sql') {
-				$this->download_and_check($config, $parsed_response->files[0], 'sql');
+				$this->download_and_check($site, $parsed_response->files[0], 'sql');
 				// die();
 				// die("num arc:" . $this->num_archives);
 			}
