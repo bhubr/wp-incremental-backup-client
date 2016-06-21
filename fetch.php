@@ -1,6 +1,6 @@
 <?php
-define('BACKUP_ROOT', '/Volumes/Backup/Geek/Sites');
-define('KEEPASS_FILE', '/Volumes/NO NAME/sites.kdbx');
+define('BACKUP_ROOT', '/home/debian/Sites');
+define('KEEPASS_FILE', '/home/debian/sites.kdbx');
 define('KEEPASS_DBID', 'sites');
 define('KEEPASS_DEBUG', false);
 define('WPIB_CLIENT_DEBUG_MODE', true);
@@ -226,8 +226,8 @@ class T1z_WP_Incremental_Backup_Client {
 			$this->post_generate_backup($config, $site);
 			$this->concat_backups($config, $site);
 			curl_close($this->ch);
-			exec("rm -rf {$this->keepass_datadir}", $out, $ret);
 		}
+		exec("rm -rf {$this->keepass_datadir}", $out, $ret);
 	}
 
 	/**
@@ -401,13 +401,13 @@ echo $this->mode . "\n";
 		global $global_fh;
 		
 		$http_code = curl_getinfo($this->ch, CURLINFO_HTTP_CODE);
-		echo "cURL write func: " . __FUNCTION__ . ", http code: $http_code\n";
+		// echo "cURL write func: " . __FUNCTION__ . ", http code: $http_code\n";
 	  // global $global_fh;
-		var_dump($global_fh);
-		var_dump(substr(base64_encode($data), 0, 50));
+		// var_dump($global_fh);
+		// var_dump(substr(base64_encode($data), 0, 50));
 	  $len = fwrite($global_fh, $data);
 	  $this->total_written += $len;
-	  echo "$len bytes written\n";
+	  // echo "$len bytes written\n";
 	  return $len;
 	}
 
@@ -653,19 +653,30 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 		// 	echo $cmd2 . "\n";
 		// 	echo shell_exec($cmd2);
 
-		// 	$to_delete_list_file = $wp_expanded_dir . DIRECTORY_SEPARATOR . FILES_TO_DELETE;
-		// 	if(file_exists($to_delete_list_file)) {
-		// 		$files_to_delete = file($to_delete_list_file);
-		// 		$files_to_delete_escaped = array_map(function($file) {
-		// 			return escapeshellarg(trim($file));
-		// 		}, $files_to_delete);
-		// 		$files_to_delete_str = implode(' ', $files_to_delete_escaped);
+		 	$to_delete_list_file = $this->wp_expanded_dir . DIRECTORY_SEPARATOR .'wp-content/uploads/'. FILE_LIST_TO_DELETE;
+echo $to_delete_list_file . "\n";
+			echo file_exists($to_delete_list_file) ? "there are files to delete...\n" : "no files to delete \n";
+		 	if(file_exists($to_delete_list_file)) {
+		 		$files_to_delete = file($to_delete_list_file);
+				var_dump($files_to_delete);
+		 		$files_to_delete_escaped = array_map(function($file) {
+		 			return trim($file);
+		 		}, $files_to_delete);
+		 		// $files_to_delete_str = implode(' ', $files_to_delete_escaped);
 		// 		// var_dump($files_to_delete_str);
-		// 		$cmd3 = "cd $wp_expanded_dir; rm $files_to_delete_str";
-		// 		echo shell_exec($cmd3);
+		 		// $cmd3 = "cd $wp_expanded_dir; rm $files_to_delete_str";
+		 		foreach($files_to_delete_escaped as $ftd) {
+		 			$fullpath = $this->wp_expanded_dir . DIRECTORY_SEPARATOR . $ftd;
+		 			echo "$fullpath must be deleted\n";
+		 			if(file_exists($fullpath)) {
+		 				echo "deleting $fullpath\n";
+		 				unlink($fullpath);
+	 				}
+		 		}
+		 		echo shell_exec($cmd3);
 
-		// 		// unlink($to_delete_list_file);
-		// 	}
+		 		// unlink($to_delete_list_file);
+		 	}
 		// }
 	}
 }
