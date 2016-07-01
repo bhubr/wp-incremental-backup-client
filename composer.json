@@ -1,6 +1,7 @@
 {
 	"minimum-stability": "dev",
 	"require": {
-		"keepassphp/keepassphp": "dev-master"
+		"keepassphp/keepassphp": "dev-master",
+		"google/apiclient": "2.*"
 	}
 }
