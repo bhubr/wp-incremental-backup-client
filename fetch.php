@@ -1,4 +1,7 @@
 <?php
+require realpath(__DIR__ . '/inc/constants.php');
+require_once "vendor/autoload.php";
+
 define('BACKUP_ROOT', '/Volumes/Backup/Geek/Sites');
 define('KEEPASS_FILE', '/Volumes/NO NAME/sites.kdbx');
 define('KEEPASS_DBID', 'sites');
@@ -6,14 +9,100 @@ define('KEEPASS_DEBUG', false);
 define('WPIB_CLIENT_DEBUG_MODE', true);
 define('WPIB_CLIENT_DEBUG_LEN', 15);
 
-require realpath(__DIR__ . '/inc/constants.php');
-require_once "vendor/autoload.php";
+define('APPLICATION_NAME', 'Drive API PHP Quickstart');
+define('CREDENTIALS_PATH', '~/.credentials/drive-php-upload.json');
+define('CLIENT_SECRET_PATH', __DIR__ . '/client_secret.json');
+define('FOLDER_ID_FILE', __DIR__ . '/folder_id.json');
+// If modifying these scopes, delete your previously saved credentials
+// at ~/.credentials/drive-php-quickstart.json
+define('SCOPES', implode(' ', array(
+  Google_Service_Drive::DRIVE_METADATA_READONLY)
+));
+
+if (php_sapi_name() != 'cli') {
+  throw new Exception('This application must be run on the command line.');
+}
+
 use \KeePassPHP\KeePassPHP as KeePassPHP;
 use \KeePassPHP\ProtectedXMLReader as ProtectedXMLReader;
 
 $global_fh = null;
 
+/**
+ * Returns an authorized API client.
+ * @return Google_Client the authorized client object
+ */
+function getClient() {
+  $client = new Google_Client();
+  $client->setApplicationName(APPLICATION_NAME);
+  // $client->setScopes(SCOPES);
+  $client->addScope("https://www.googleapis.com/auth/drive");
+  $client->setAuthConfigFile(CLIENT_SECRET_PATH);
+  $client->setAccessType('offline');
 
+  // Load previously authorized credentials from a file.
+  $credentialsPath = expandHomeDirectory(CREDENTIALS_PATH);
+  if (file_exists($credentialsPath)) {
+    $accessToken = json_decode(file_get_contents($credentialsPath), true);
+  } else {
+    // Request authorization from the user.
+    $authUrl = $client->createAuthUrl();
+    printf("Open the following link in your browser:\n%s\n", $authUrl);
+    print 'Enter verification code: ';
+    $authCode = trim(fgets(STDIN));
+
+    // Exchange authorization code for an access token.
+    $accessToken = $client->authenticate($authCode);
+// var_dump($accessToken);
+    // Store the credentials to disk.
+    if(!file_exists(dirname($credentialsPath))) {
+      mkdir(dirname($credentialsPath), 0700, true);
+    }
+    file_put_contents($credentialsPath, json_encode($accessToken));
+    printf("Credentials saved to %s\n", $credentialsPath);
+  }
+  $client->setAccessToken($accessToken);
+// var_dump($client->getAccessToken());
+  // Refresh the token if it's expired.
+  if ($client->isAccessTokenExpired()) {
+    $client->refreshToken($client->getRefreshToken());
+    file_put_contents($credentialsPath, json_encode($client->getAccessToken()));
+  }
+  var_dump($client);
+  return $client;
+}
+
+
+/**
+ * Expands the home directory alias '~' to the full path.
+ * @param string $path the path to expand.
+ * @return string the expanded path.
+ */
+function expandHomeDirectory($path) {
+  $homeDirectory = getenv('HOME');
+  if (empty($homeDirectory)) {
+    $homeDirectory = getenv("HOMEDRIVE") . getenv("HOMEPATH");
+  }
+  return str_replace('~', realpath($homeDirectory), $path);
+}
+
+
+function readVideoChunk ($handle, $chunkSize)
+{
+    $byteCount = 0;
+    $giantChunk = "";
+    while (!feof($handle)) {
+        // fread will never return more than 8192 bytes if the stream is read buffered and it does not represent a plain file
+        $chunk = fread($handle, 8192);
+        $byteCount += strlen($chunk);
+        $giantChunk .= $chunk;
+        if ($byteCount >= $chunkSize)
+        {
+            return $giantChunk;
+        }
+    }
+    return $giantChunk;
+}
 
 // http://stackoverflow.com/questions/187736/command-line-password-prompt-in-php
 function prompt_silent($prompt = "Enter Password:") {
@@ -90,6 +179,12 @@ class T1z_WP_Incremental_Backup_Client {
 	private $keepass_datadir = __DIR__ . "/data";
 
 	/**
+	 * Google Drive client&service
+	 */
+	private $client;
+	private $service;
+
+	/**
 	 * Constructor: read ini file and setup cURL
 	 */
 	public function __construct() {
@@ -97,6 +192,25 @@ class T1z_WP_Incremental_Backup_Client {
 		$this->setup_keepass();
 		$this->cookie = tempnam ("/tmp", "CURLCOOKIE");
 		$this->read_config();
+		$this->client = getClient();
+		$this->service = new Google_Service_Drive($this->client);
+		if (!$this->client->getAccessToken()) {
+			die("Une erreur est survenue lors de la connexion à Google Drive");
+		}
+		if(file_exists(FOLDER_ID_FILE)) {
+			$this->gd_folder_id = file_get_contents(FOLDER_ID_FILE);
+		}
+		else {
+			$fileMetadata = new Google_Service_Drive_DriveFile(array(
+			  'name' => 'WordPressBackup',
+			  'mimeType' => 'application/vnd.google-apps.folder'));
+			$file = $this->service->files->create($fileMetadata, array(
+			  'fields' => 'id'));
+			printf("Folder ID: %s\n", $file->id);
+			$this->gd_folder_id = $file->id;
+			file_put_contents(FOLDER_ID_FILE, $file->id);
+		}
+
 	}
 
 	private function setup_keepass() {
@@ -401,13 +515,13 @@ echo $this->mode . "\n";
 		global $global_fh;
 		
 		$http_code = curl_getinfo($this->ch, CURLINFO_HTTP_CODE);
-		echo "cURL write func: " . __FUNCTION__ . ", http code: $http_code\n";
+		// echo "cURL write func: " . __FUNCTION__ . ", http code: $http_code\n";
 	  // global $global_fh;
 		var_dump($global_fh);
 		var_dump(substr(base64_encode($data), 0, 50));
 	  $len = fwrite($global_fh, $data);
 	  $this->total_written += $len;
-	  echo "$len bytes written\n";
+	  // echo "$len bytes written\n";
 	  return $len;
 	}
 
@@ -426,7 +540,7 @@ echo $this->mode . "\n";
 echo "setup for download\n";
 		$global_fh = fopen($destination, "w+");
 		if (!$global_fh) die("could not open $destination\n");
-		var_dump($global_fh);
+		// var_dump($global_fh);
 		$this->setup_curl_for_download();
 		echo "size before: " . filesize($destination) . "\n";
 		curl_exec($this->ch);
@@ -435,7 +549,7 @@ echo "setup for download\n";
 		$stat = stat($destination);
 		echo "total written: {$this->total_written}\n";
 		echo "stat for $destination\n";
-		var_dump($stat);
+		// var_dump($stat);
 		echo "size after: " . filesize($destination) . "\n";
 		// curl_exec($this->ch);
 
@@ -520,12 +634,62 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 			$file = basename(array_shift($files));
 			echo "Downloading arc idx: $arc_idx $file\n";
 			$this->download_and_check($site, $file, 'files');
-
+			$this->upload_to_google_drive($site, $file);
 
 			printf("%d/%d DONE with file %s\n", $arc_idx, $this->num_archives, $file);
 		}
 	
 
+	}
+
+	private function upload_to_google_drive($site, $filename) {
+		// Fuck PHP, and I mean it!
+		// http://stackoverflow.com/questions/5167313/php-problem-filesize-return-0-with-file-containing-few-data
+		clearstatcache();
+		$source = $this->dest_dir . DIRECTORY_SEPARATOR . $filename;
+		// die($source . ', ' . filesize($source));
+		$file = new Google_Service_Drive_DriveFile([
+			'name' => $filename,
+			'parents' => [$this->gd_folder_id]
+		]);
+		$file->name = "$filename";
+		$chunkSizeBytes = 1 * 1024 * 1024;
+
+		// Call the API with the media upload, defer so it doesn't immediately return.
+		$this->client->setDefer(true);
+		$request = $this->service->files->create($file);
+
+		// Create a media file upload to represent our upload process.
+		$media = new Google_Http_MediaFileUpload(
+		    $this->client,
+		    $request,
+		    'application/bzip',
+		    null,
+		    true,
+		    $chunkSizeBytes
+		);
+		$media->setFileSize(filesize($source));
+
+		// Upload the various chunks. $status will be false until the process is
+		// complete.
+		$status = false;
+		$handle = fopen($source, "rb");
+		while (!$status && !feof($handle)) {
+		  // read until you get $chunkSizeBytes from TESTFILE
+		  // fread will never return more than 8192 bytes if the stream is read buffered and it does not represent a plain file
+		  // An example of a read buffered file is when reading from a URL
+		  $chunk = readVideoChunk($handle, $chunkSizeBytes);
+		  $status = $media->nextChunk($chunk);
+		}
+
+		// The final value of $status will be the data from the API for the object
+		// that has been uploaded.
+		$result = false;
+		if ($status != false) {
+		  $result = $status;
+		}
+
+		fclose($handle);
 	}
 
 	/**
