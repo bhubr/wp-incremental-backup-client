@@ -43,7 +43,8 @@ function getClient() {
   // Load previously authorized credentials from a file.
   $credentialsPath = expandHomeDirectory(CREDENTIALS_PATH);
   if (file_exists($credentialsPath)) {
-    $accessToken = json_decode(file_get_contents($credentialsPath), true);
+    $accessToken = file_get_contents($credentialsPath);
+    
   } else {
     // Request authorization from the user.
     $authUrl = $client->createAuthUrl();
@@ -53,7 +54,7 @@ function getClient() {
 
     // Exchange authorization code for an access token.
     $accessToken = $client->authenticate($authCode);
-// var_dump($accessToken);
+// var_dump($accessToken);die();
     // Store the credentials to disk.
     if(!file_exists(dirname($credentialsPath))) {
       mkdir(dirname($credentialsPath), 0700, true);
@@ -64,6 +65,7 @@ function getClient() {
   $client->setAccessToken($accessToken);
 // var_dump($client->getAccessToken());
   // Refresh the token if it's expired.
+  // var_dump($client->getRefreshToken());die();
   if ($client->isAccessTokenExpired()) {
     $client->refreshToken($client->getRefreshToken());
     file_put_contents($credentialsPath, json_encode($client->getAccessToken()));
