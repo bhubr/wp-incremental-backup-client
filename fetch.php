@@ -1,86 +1,108 @@
 <?php
+/**
+ * WP Incremental Backup Client
+ * Uses:
+ *   - cURL to send requests the Backup Plugin
+ *   - Google Drive to stored fetched backup files
+ *   - KeePass to store WordPress site credentials
+ */
+
+/**
+ * Class shorthands
+ */
+use \KeePassPHP\KeePassPHP as KeePassPHP;
+use \KeePassPHP\ProtectedXMLReader as ProtectedXMLReader;
+
+/**
+ * Constants and autoloader
+ */
 require realpath(__DIR__ . '/inc/constants.php');
 require_once "vendor/autoload.php";
 
+/**
+ * Client constants
+ */
 define('BACKUP_ROOT', '/Volumes/Backup/Geek/Sites');
-define('KEEPASS_FILE', '/Volumes/NO NAME/sites.kdbx');
-define('KEEPASS_DBID', 'sites');
-define('KEEPASS_DEBUG', false);
 define('WPIB_CLIENT_DEBUG_MODE', true);
 define('WPIB_CLIENT_DEBUG_LEN', 15);
 
+/**
+ * KeePass constants
+ */
+define('KEEPASS_FILE', '/Volumes/NO NAME/sites.kdbx');
+define('KEEPASS_DBID', 'sites');
+define('KEEPASS_DEBUG', false);
+
+/**
+ * Google Drive constants
+ */
 define('APPLICATION_NAME', 'Drive API PHP Quickstart');
 define('CREDENTIALS_PATH', '~/.credentials/drive-php-upload.json');
 define('CLIENT_SECRET_PATH', __DIR__ . '/client_secret.json');
 define('FOLDER_ID_FILE', __DIR__ . '/folder_id.json');
-// If modifying these scopes, delete your previously saved credentials
-// at ~/.credentials/drive-php-quickstart.json
-define('SCOPES', implode(' ', array(
-  Google_Service_Drive::DRIVE_METADATA_READONLY)
-));
 
+/**
+ * Global file handler for big downloads
+ */
+global $global_fh;
+$global_fh = null;
+
+/*------------------------
+ | Application starts here
+ *------------------------*/
 if (php_sapi_name() != 'cli') {
   throw new Exception('This application must be run on the command line.');
 }
 
-use \KeePassPHP\KeePassPHP as KeePassPHP;
-use \KeePassPHP\ProtectedXMLReader as ProtectedXMLReader;
-
-$global_fh = null;
-
 /**
- * Returns an authorized API client.
+ * Google Drive: returns an authorized API client.
  * @return Google_Client the authorized client object
  */
-function getClient() {
-  $client = new Google_Client();
-  $client->setApplicationName(APPLICATION_NAME);
-  // $client->setScopes(SCOPES);
-  $client->addScope("https://www.googleapis.com/auth/drive");
-  $client->setAuthConfigFile(CLIENT_SECRET_PATH);
-  $client->setAccessType('offline');
+function get_client() {
+	$client = new Google_Client();
+	$client->setApplicationName(APPLICATION_NAME);
+	$client->addScope("https://www.googleapis.com/auth/drive");
+	$client->setAuthConfigFile(CLIENT_SECRET_PATH);
+	$client->setAccessType('offline');
 
-  // Load previously authorized credentials from a file.
-  $credentialsPath = expandHomeDirectory(CREDENTIALS_PATH);
-  if (file_exists($credentialsPath)) {
-    $accessToken = file_get_contents($credentialsPath);
-    
-  } else {
-    // Request authorization from the user.
-    $authUrl = $client->createAuthUrl();
-    printf("Open the following link in your browser:\n%s\n", $authUrl);
-    print 'Enter verification code: ';
-    $authCode = trim(fgets(STDIN));
+  	// Load previously authorized credentials from a file.
+	$credentialsPath = expand_home_directory(CREDENTIALS_PATH);
+	if (file_exists($credentialsPath)) {
+	    $accessToken = file_get_contents($credentialsPath);
+	} else {
+	    // Request authorization from the user.
+	    $authUrl = $client->createAuthUrl();
+	    printf("Open the following link in your browser:\n%s\n", $authUrl);
+	    print 'Enter verification code: ';
+	    $authCode = trim(fgets(STDIN));
 
-    // Exchange authorization code for an access token.
-    $accessToken = $client->authenticate($authCode);
-// var_dump($accessToken);die();
-    // Store the credentials to disk.
-    if(!file_exists(dirname($credentialsPath))) {
-      mkdir(dirname($credentialsPath), 0700, true);
-    }
-    file_put_contents($credentialsPath, json_encode($accessToken));
-    printf("Credentials saved to %s\n", $credentialsPath);
-  }
-  $client->setAccessToken($accessToken);
-// var_dump($client->getAccessToken());
-  // Refresh the token if it's expired.
-  // var_dump($client->getRefreshToken());die();
-  if ($client->isAccessTokenExpired()) {
-    $client->refreshToken($client->getRefreshToken());
-    file_put_contents($credentialsPath, json_encode($client->getAccessToken()));
-  }
-  var_dump($client);
-  return $client;
+	    // Exchange authorization code for an access token.
+	    $accessToken = $client->authenticate($authCode);
+
+	    // Store the credentials to disk.
+	    if(!file_exists(dirname($credentialsPath))) {
+			mkdir(dirname($credentialsPath), 0700, true);
+	    }
+	    file_put_contents($credentialsPath, json_encode($accessToken));
+	    printf("Credentials saved to %s\n", $credentialsPath);
+	}
+  	$client->setAccessToken($accessToken);
+
+	// Refresh the token if it's expired.
+	if ($client->isAccessTokenExpired()) {
+	    $client->refreshToken($client->getRefreshToken());
+	    file_put_contents($credentialsPath, json_encode($client->getAccessToken()));
+	}
+	return $client;
 }
 
 
 /**
- * Expands the home directory alias '~' to the full path.
+ * Google Drive: expands the home directory alias '~' to the full path.
  * @param string $path the path to expand.
  * @return string the expanded path.
  */
-function expandHomeDirectory($path) {
+function expand_home_directory($path) {
   $homeDirectory = getenv('HOME');
   if (empty($homeDirectory)) {
     $homeDirectory = getenv("HOMEDRIVE") . getenv("HOMEPATH");
@@ -88,8 +110,10 @@ function expandHomeDirectory($path) {
   return str_replace('~', realpath($homeDirectory), $path);
 }
 
-
-function readVideoChunk ($handle, $chunkSize)
+/**
+ * Google Drive: read a chunk from file handle
+ */
+function read_video_chunk ($handle, $chunkSize)
 {
     $byteCount = 0;
     $giantChunk = "";
@@ -106,7 +130,10 @@ function readVideoChunk ($handle, $chunkSize)
     return $giantChunk;
 }
 
-// http://stackoverflow.com/questions/187736/command-line-password-prompt-in-php
+/**
+ * Prompt a password silently
+ * Source: http://stackoverflow.com/questions/187736/command-line-password-prompt-in-php
+ */
 function prompt_silent($prompt = "Enter Password:") {
   if (preg_match('/^win/i', PHP_OS)) {
     $vbscript = sys_get_temp_dir() . 'prompt_password.vbs';
@@ -134,18 +161,15 @@ function prompt_silent($prompt = "Enter Password:") {
 }
 
 
-
+/**
+ * Client main class
+ */
 class T1z_WP_Incremental_Backup_Client {
 
 	/**
 	 * cURL handle
 	 */
 	private $ch;
-
-	/**
-	 * Second handle for downloading files
-	 */
-	// private $ch_download;
 
 	/**
 	 * Parsed json response
@@ -157,44 +181,69 @@ class T1z_WP_Incremental_Backup_Client {
 	 */
 	private $config;
 
+	/**
+	 * Login URL to WordPres site
+	 */
 	private $login_url;
 
+	/**
+	 * Total number of tarballs to be fetched
+	 */
 	private $num_archives;
 
 	/**
-	 * Latest ZIP file name
+	 * Array containing the downloaded files
 	 */
-	private $zip_filename;
-
 	private $downloaded_files;
 
-	private $download_fh;
-
+	/**
+	 * Per-site root dir
+	 */
 	private $dest_dir_prefix;
-	private $dest_dir;
-	private $mode = 'normal';
 
+	/**
+	 * Destination dir for downloaded backup files
+	 */
+	private $dest_dir;
+
+	/**
+	 * WordPress uncompressed dir
+	 */
+	private $wp_expanded_dir;
+
+	/**
+	 * KeePass database
+	 */
 	private $keepass_db;
 
+	/**
+	 * Map KeePass uuid to sites
+	 */
 	private $keepass_map = [];
 
+	/**
+	 * KeePassPHP data dir
+	 */
 	private $keepass_datadir = __DIR__ . "/data";
 
 	/**
-	 * Google Drive client&service
+	 * Google Drive client
 	 */
 	private $client;
+
+	/**
+	 * Google Drive service
+	 */
 	private $service;
 
 	/**
 	 * Constructor: read ini file and setup cURL
 	 */
 	public function __construct() {
-		// if(! is_dir('BACKUP_ROOT')) die(BACKUP_ROOT . " could not be found\n");
 		$this->setup_keepass();
 		$this->cookie = tempnam ("/tmp", "CURLCOOKIE");
 		$this->read_config();
-		$this->client = getClient();
+		$this->client = get_client();
 		$this->service = new Google_Service_Drive($this->client);
 		if (!$this->client->getAccessToken()) {
 			die("Une erreur est survenue lors de la connexion à Google Drive");
@@ -203,10 +252,10 @@ class T1z_WP_Incremental_Backup_Client {
 			$this->gd_folder_id = file_get_contents(FOLDER_ID_FILE);
 		}
 		else {
-			$fileMetadata = new Google_Service_Drive_DriveFile(array(
+			$file_metadata = new Google_Service_Drive_DriveFile(array(
 			  'name' => 'WordPressBackup',
 			  'mimeType' => 'application/vnd.google-apps.folder'));
-			$file = $this->service->files->create($fileMetadata, array(
+			$file = $this->service->files->create($file_metadata, array(
 			  'fields' => 'id'));
 			printf("Folder ID: %s\n", $file->id);
 			$this->gd_folder_id = $file->id;
@@ -215,30 +264,26 @@ class T1z_WP_Incremental_Backup_Client {
 
 	}
 
+	/**
+	 * Setup KeePass
+	 */
 	private function setup_keepass() {
-
 		if(!KeePassPHP::init($this->keepass_datadir, KEEPASS_DEBUG)) {
 			die("KeePassPHP Initialization failed.");
 		}
-
 		$pwd = prompt_silent();
 		$kphpdb_pwd = '';
 		if(empty($kphpdb_pwd)) {
 			$kphpdb_pwd = KeePassPHP::extractHalfPassword($pwd);
 		}
-
-		if(KeePassPHP::existsKphpDB(KEEPASS_DBID))
-		{
-			if(!KeePassPHP::removeDatabase(KEEPASS_DBID, $kphpdb_pwd))
-				printf("Database '" . KEEPASS_DBID .
-					"' already exists and cannot be deleted.");
+		if(KeePassPHP::existsKphpDB(KEEPASS_DBID)) {
+			if(!KeePassPHP::removeDatabase(KEEPASS_DBID, $kphpdb_pwd)) {
+				printf("Database '%s' already exists and cannot be deleted.", KEEPASS_DBID);
+			}
 		}
-
-
 		if(!KeePassPHP::addDatabaseFromFiles(KEEPASS_DBID, KEEPASS_FILE, $pwd, '', $kphpdb_pwd, true)) {
 			die("Cannot add database '" . KEEPASS_DBID . "'.");
 		}
-				
 		$this->keepass_db = KeePassPHP::getDatabase(KEEPASS_DBID, $kphpdb_pwd, $pwd, true);
 		if($this->keepass_db == null) {
 			die("Cannot get database '" . KEEPASS_DBID . "'.");
@@ -253,9 +298,11 @@ class T1z_WP_Incremental_Backup_Client {
 				'url'  => $entry->url
 			];
 		}
-
 	}
 
+	/**
+	 * Get username and password for site
+	 */
 	private function get_credentials($site) {
 		$entry = $this->keypass_map[$site];
 		$user = $entry['user'];
@@ -272,6 +319,9 @@ class T1z_WP_Incremental_Backup_Client {
 		];
 	}
 
+	/**
+	 * Get URL for site
+	 */
 	private function get_url($site) {
 		$url = $this->keypass_map[$site]['url'];
 		if (empty($url)) {
@@ -316,10 +366,10 @@ class T1z_WP_Incremental_Backup_Client {
 				'sql' => []
 			];
 			$this->ch = $this->setup_curl();
-			if (! $this->ch) { die ("cURL init failed for 1st handle!!"); }
+			if (! $this->ch) {
+				die ("cURL init failed for 1st handle!!");
+			}
 			$this->setup_curl_for_html();
-			// $this->ch_download = $this->setup_curl();
-			// if (! $this->ch_download) { die ("cURL init failed for 1st handle!!"); }
 			printf ("\n\n *******   Begin process for site: %25s   ********\n", $site);
 
 			if (substr($this->get_url($site), -1) !== '/') {
@@ -330,15 +380,8 @@ class T1z_WP_Incremental_Backup_Client {
 			$this->dest_dir = $this->dest_dir_prefix . DIRECTORY_SEPARATOR . "wpib";
 			$this->wp_expanded_dir = $this->dest_dir_prefix . DIRECTORY_SEPARATOR . "wordpress";
 
-			// $this->get_login($config);
-			// foreach (['json' => $this->ch, 'binary' => $this->ch_download] as $type => 	$curl_handle) {
-			// 	
-				
-			// }
 			$this->login_to_wordpress($config, $site);
-
 			$this->setup_curl_for_json();
-			// die('ok login');
 			$this->post_generate_backup($config, $site);
 			$this->concat_backups($config, $site);
 			curl_close($this->ch);
@@ -354,6 +397,9 @@ class T1z_WP_Incremental_Backup_Client {
 		echo substr($str, 0, WPIB_CLIENT_DEBUG_LEN) . "\n\n"; 
 	}
 
+	/**
+	 * Login to a WordPress site
+	 */
 	private function login_to_wordpress($ch, $config) {
 		$this->get_login($ch, $config);
 		$this->post_login($ch, $config);
@@ -363,12 +409,10 @@ class T1z_WP_Incremental_Backup_Client {
 	 * GET WordPress login page
 	 */
 	private function get_login($config, $site) {
-		var_dump($config);
 		$this->login_url = $this->get_url($site) . (array_key_exists('login_url', $config) ? $config['login_url'] : 'wp-login.php');
 		printf("* GET login page [url = %s]\n", $this->login_url);
 		curl_setopt($this->ch, CURLOPT_URL,  $this->login_url);
 		curl_exec($this->ch);
-		// $response = $this->send_request();
 		if (! $this->response) die("[get_login] cURL error: " . curl_error($this->ch) . "\n");
 		if (WPIB_CLIENT_DEBUG_MODE) $this->log('GET login page', $this->response);
 	}
@@ -381,12 +425,9 @@ class T1z_WP_Incremental_Backup_Client {
 		$postdata = "log=". $credentials['user'] ."&pwd=". urlencode($credentials['pass']) ."&wp-submit=Se+connecter&redirect_to=". $this->get_url($site) ."wp-admin/&testcookie=1";
 		printf("\n\n * POST login to %\n", $this->login_url);
 
-		// $html_response = $this->send_request();
-
 		curl_setopt($this->ch, CURLOPT_POSTFIELDS, $postdata);
 		curl_setopt($this->ch, CURLOPT_POST, 1);
 		curl_exec($this->ch);
-		// $response = $this->send_request();
 		$lines = explode("\n", $this->response);
 		if (count($lines) < 2) {
 			echo "This doesn't seem like an HTML output:\n";
@@ -396,34 +437,21 @@ class T1z_WP_Incremental_Backup_Client {
 		if (! preg_match('/.*wp\-toolbar.*/', $lines[2])) {
 			echo "There should be 'wp-toolbar' on this line:\n";
 			echo $lines[2] . "\n";
-			var_dump($lines);
-			// exit;
 		}
 		if (! $this->response) die("[post_login] cURL error: " . curl_error($this->ch) . "\n");
 		if (WPIB_CLIENT_DEBUG_MODE) $this->log('POST login credentials', $this->response);
 	}
 
 	/**
-	 * GET WordPress admin page
+	 * Get response and check errors
 	 */
-	// private function get_admin($config, $site) {
-	// 	curl_setopt($this->ch, CURLOPT_POST, 0);
-	// 	curl_setopt($this->ch, CURLOPT_POSTFIELDS, "");
-	// 	curl_setopt($this->ch, CURLOPT_URL, $this->get_url($site) . 'wp-admin/');
-	// 	// $response = curl_exec ($this->ch);
-	// 	if (! $response) die("[get_login] cURL error: " . curl_error($this->ch) . "\n");
-	// 	if (WPIB_CLIENT_DEBUG_MODE) $this->log('GET login page', $response);
-	// }
-
 	private function check_request_response($data) {
-
+		// Store response
 		$this->response = $data;
 		// Send request and die on cURL error
-		// $response = curl_exec($this->ch);
 		$http_code = curl_getinfo($this->ch, CURLINFO_HTTP_CODE);
 
-echo $this->mode . "\n";
-		if($this->mode === 'download') return;
+		// if($this->mode === 'download') return;
 
 		// Die on HTTP error
 		if ($http_code !== 200) {
@@ -433,26 +461,20 @@ echo $this->mode . "\n";
 		if (empty($this->response)) {
 			die(" !!! [post_generate_backup] cURL error: " . curl_error($this->ch) . "\n");
 		}
-		
-		// return $this->response;
 	}
 
-	// private function curl_parse_html_response() {
-	// 	$html_response = $this->send_request();
-	// }	
+	/**
+	 * Get HTML response
+	 */
 	private function curl_get_html_response($ch, $data) {
-		echo "cURL write func: " . __FUNCTION__ . "\n";
 		$this->check_request_response($data);
-		// die($data);
 	}
 
+	/**
+	 * Get JSON response
+	 */
 	private function curl_parse_json_response($ch, $data) {
-		echo "cURL write func: " . __FUNCTION__ . "\n";
-		// $json_response = $this->send_request();
 		$this->check_request_response($data);
-		printf("\ncurl_parse_json_response: %s\n",substr($this->response, 0, 30));
-
-
 		// Parse JSON response
 		$this->parsed_response = json_decode($this->response);
 
@@ -461,96 +483,60 @@ echo $this->mode . "\n";
 			echo " !!! [post_generate_backup] JSON parse error. Received payload:\n";
 			die('[>' . $this->response . "<]\n");
 		}
-
-		// return $parsed_response;
-	}
-
-	private function progress_nop() {
-
-	}
-
-	private function progress($resource,$download_size, $downloaded, $upload_size, $uploaded)
-	{
-
-		echo __FUNCTION__ . "{$downloaded}/{$download_size}\n";
-	    // if($download_size > 0)
-	    //      echo $downloaded / $download_size  * 100;
-	    // ob_flush();
-	    // flush();
-	    // sleep(1); // just to see effect
 	}
 
 
+	/**
+	 * Setup cURL for HTML
+	 */
 	private function setup_curl_for_html() {
-		// curl_setopt($this->ch, CURLOPT_BINARYTRANSFER, 0);
-		// $this->mode = 'normal';
+		curl_setopt($this->ch, CURLOPT_BINARYTRANSFER, 0);
 		curl_setopt($this->ch, CURLOPT_WRITEFUNCTION, [$this, 'curl_get_html_response']);
-		// curl_setopt($this->ch, CURLOPT_PROGRESSFUNCTION, [$this, 'progress_nop']);
 	}
 
+	/**
+	 * Setup cURL for JSON
+	 */
 	private function setup_curl_for_json() {
-		// curl_setopt($this->ch, CURLOPT_BINARYTRANSFER, 0);
-		// $this->mode = 'normal';
+		curl_setopt($this->ch, CURLOPT_BINARYTRANSFER, 0);
 		curl_setopt($this->ch, CURLOPT_WRITEFUNCTION, [$this, 'curl_parse_json_response']);
-		// curl_setopt($this->ch, CURLOPT_PROGRESSFUNCTION, [$this, 'progress_nop']);
 	}
 
-
+	/**
+	 * Setup cURL for file download
+	 */
 	private function setup_curl_for_download() {
-		echo "SETUP CURL: " . __FUNCTION__ . "\n";
 		$this->total_written = 0;
-		// die(__FUNCTION__);
-		// $this->mode = 'download';
-		// die($this->mode);
-		// curl_setopt($ch, CURLOPT_POST, 0);
-		// curl_setopt($ch, CURLOPT_VERBOSE, 0);
-		// curl_setopt($ch, CURLOPT_POSTFIELDS,"");
-		// curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
-		// curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
 		curl_setopt($this->ch, CURLOPT_BINARYTRANSFER, 1);
 		curl_setopt($this->ch, CURLOPT_WRITEFUNCTION, [$this, 'curl_write_file']);
-		// curl_setopt($this->ch, CURLOPT_PROGRESSFUNCTION, [$this, 'progress']);
 	}
 
-
+	/**
+	 * Write to file handle (for downloads)
+	 */
 	function curl_write_file($cp, $data) {
 		global $global_fh;
-		
-		$http_code = curl_getinfo($this->ch, CURLINFO_HTTP_CODE);
   	    $len = fwrite($global_fh, $data);
 	    $this->total_written += $len;
 	    return $len;
 	}
 
-
+	/**
+	 * Download a file and check its md5 sum against that of the remote file
+	 */
 	private function download_and_check($site, $file, $dest) {
 		global $global_fh;
 		$check_md5_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_check_md5";
 		$destination = $this->dest_dir . DIRECTORY_SEPARATOR . $file;
-// die($destination);
-		echo "Preparing download for $file => $destination\n";
-		echo "Downloading $destination ... \n";
-		// $ch = $this->setup_curl();
+		echo "Download $file => $destination\n";
 
-		// $this->login_to_wordpress($this->ch_download, $config);
 		curl_setopt ($this->ch, CURLOPT_URL, $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_download&filename=$file");
-echo "setup for download\n";
 		$global_fh = fopen($destination, "w+");
 		if (!$global_fh) die("could not open $destination\n");
-		// var_dump($global_fh);
 		$this->setup_curl_for_download();
-		echo "size before: " . filesize($destination) . "\n";
 		curl_exec($this->ch);
 		fclose($global_fh);
-		sleep(1);
-		$stat = stat($destination);
-		echo "total written: {$this->total_written}\n";
-		echo "stat for $destination\n";
-		// var_dump($stat);
-		echo "size after: " . filesize($destination) . "\n";
-		// curl_exec($this->ch);
 
-echo "download call done\n";
 		if(! file_exists($destination)) {
 			printf("Error while downloading %s\n", $destination);
 			exit(1);
@@ -560,11 +546,9 @@ echo "download call done\n";
 		}
 		$this->downloaded_files[$dest][] = $destination;
 
-echo "setup for json and fire md5 check\n";
+		// Setup again for JSON mode and send md5 check request
 		$this->setup_curl_for_json();
 		$md5 = md5_file($destination);
-		// ech
-echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 		curl_setopt ($this->ch, CURLOPT_URL, "$check_md5_url&file=" . urlencode($file) . "&md5=$md5");
 		curl_exec($this->ch);
 
@@ -572,61 +556,38 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 			printf("md5 differ: srv=%s, cli=%s", $this->parsed_response->md5_server, $md5);
 			exit(1);
 		}
-
-		
 	}
 
 
+	/**
+	 * Perform download loop for site
+	 */
 	private function loop_downloads($config, $site) {
-
-		// Setup output dir first
-		// $dest_dir_prefix = $this->get_destination_dir($site);
-		// $dest_dir = $dest_dir_prefix . DIRECTORY_SEPARATOR . "wpib";
-		// $wp_expanded_dir = $dest_dir_prefix . DIRECTORY_SEPARATOR . "wordpress";
-
-		// if (!is_dir($dest_dir)) mkdir($dest_dir, 0777, true);
-		// if (!is_dir($wp_expanded_dir)) mkdir($wp_expanded_dir);
-
-		// global $global_fh;
 		$download_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_download";
 		$list_url = $download_url . "&list=1";
-		
 		$gen_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_generate&step=build_archives";
 		if(isset($config['php_path'])) $gen_url .= '&php_path=' . urlencode($config['php_path']);
-		// printf(" * Start step %5s", $step);
-		// for ($idx_sub = 0 ; $idx_sub < $num_substeps ; $idx_sub++)  {
-		$arc_idx = 0;
 
-		// $json_response = $this->get_parsed_json_response($this->ch);
-		
-		// var_dump($json_response);
-		// if (empty($json_response->files)) {
-		// 	echo "*** EMPTY files array\n";
-		// 	return;
-		// }
+		// Send request for first file
+		$arc_idx = 0;
 		curl_setopt ($this->ch, CURLOPT_URL, $gen_url . "&arc_idx=$arc_idx");
 		curl_exec($this->ch);
 		
-
-		// var_dump($files);die();
+		// Continue as long as there are archives to be fetched
 		while($arc_idx < $this->num_archives) {
-
 			do {
 				curl_setopt ($this->ch, CURLOPT_URL, $list_url);
 				curl_exec($this->ch);
 				$json_response = $this->parsed_response;
 				$files = $json_response->files;
-				var_dump($files);
 				sleep(4);
 			} while (empty($files));
 
 			$arc_idx++;
-
 			if ($arc_idx < $this->num_archives) {
 				curl_setopt ($this->ch, CURLOPT_URL, $gen_url . "&arc_idx=$arc_idx");
 				curl_exec($this->ch);
 			}
-
 
 			$file = basename(array_shift($files));
 			echo "Downloading arc idx: $arc_idx $file\n";
@@ -635,16 +596,16 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 
 			printf("%d/%d DONE with file %s\n", $arc_idx, $this->num_archives, $file);
 		}
-	
-
 	}
 
+	/**
+	 * Upload file to Google Drive
+	 */
 	private function upload_to_google_drive($site, $filename) {
 		// Fuck PHP, and I mean it!
 		// http://stackoverflow.com/questions/5167313/php-problem-filesize-return-0-with-file-containing-few-data
 		clearstatcache();
 		$source = $this->dest_dir . DIRECTORY_SEPARATOR . $filename;
-		// die($source . ', ' . filesize($source));
 		$file = new Google_Service_Drive_DriveFile([
 			'name' => $filename,
 			'parents' => [$this->gd_folder_id]
@@ -672,18 +633,18 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 		$status = false;
 		$handle = fopen($source, "rb");
 		while (!$status && !feof($handle)) {
-		  // read until you get $chunkSizeBytes from TESTFILE
+		  // read until you get $chunkSizeBytes from $filename
 		  // fread will never return more than 8192 bytes if the stream is read buffered and it does not represent a plain file
 		  // An example of a read buffered file is when reading from a URL
-		  $chunk = readVideoChunk($handle, $chunkSizeBytes);
-		  $status = $media->nextChunk($chunk);
+		  	$chunk = read_video_chunk($handle, $chunkSizeBytes);
+		  	$status = $media->nextChunk($chunk);
 		}
 
 		// The final value of $status will be the data from the API for the object
 		// that has been uploaded.
 		$result = false;
 		if ($status != false) {
-		  $result = $status;
+		  	$result = $status;
 		}
 
 		fclose($handle);
@@ -700,7 +661,6 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 		// base URL (step param will be appended later)
 		$gen_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_generate";
 		$check_url = $this->get_url($site) . "wp-admin/admin-ajax.php?action=wpib_check_progress";
-		
 
 		// various steps of process
 		$steps = ['dump_sql', 'list_deleted', 'list_md5']; //, 'build_archives']; //, 'sql']; //, 'zip'];
@@ -715,28 +675,16 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 			curl_setopt ($this->ch, CURLOPT_URL, $url);
 			printf(" * Start step %5s", $step);
 
-			// for ($idx_sub = 0 ; $idx_sub < $num_substeps ; $idx_sub++)  {
-			// $url_sub = $step === 'build_archives' ? "&arc_idx=$idx_sub" : "";
 			curl_setopt ($this->ch, CURLOPT_URL, $url);
 			curl_exec ($this->ch);
-			
 			$parsed_response = $this->parsed_response;
-
-			// echo " ($parsed_response->step_of_total)  ==>  .";
 			$num_calls = 1;
-
 
 			// Parse response and die on error
 			curl_setopt ($this->ch, CURLOPT_URL, "$check_url&step=$step");
 			while($parsed_response->done === false) {
-				// echo "$step ==> check ($check_url&step=$step)\n";
 				echo ".";
 				$num_calls += 1;
-
-				// if($step === 'build_archives') {
-				// 	$this->loop_downloads($config, $site);
-					
-				// }
 				curl_setopt ($this->ch, CURLOPT_URL, "$check_url&step=$step");
 				curl_exec ($this->ch);
 				$parsed_response = $this->parsed_response; //json_decode($json_response);
@@ -747,28 +695,22 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 			if($step === 'list_md5') {
 				$this->num_archives = $parsed_response->num_archives;
 				echo "NUM ARCHIVES: {$this->num_archives}\n";
-				// die("num arc:" . $this->num_archives);
 			}
 
 			if($step === 'dump_sql') {
 				$this->download_and_check($site, $parsed_response->files[0], 'sql');
-				// die();
-				// die("num arc:" . $this->num_archives);
 			}
-
-			// if($step === 'build_archives') {
-			// 	$this->loop_downloads($config, $site);
-			// }
 
 		}
 
 		$step = 'build_archives';
-		// curl_exec($this->ch);
 		$this->loop_downloads($config, $site);
 		printf(" * Process done for %25s! *\n", $site);
-		
 	}
 
+	/**
+	 * Compute per-site destination dir from backup root
+	 */
 	private function get_destination_dir($site) {
 		return BACKUP_ROOT . DIRECTORY_SEPARATOR . $site;
 	}
@@ -777,42 +719,22 @@ echo "$check_md5_url&file=" . urlencode($file) . "&md5=$md5\n";
 	 * GET request to fetch backup
 	 */
 	private function concat_backups($config, $site) {
-		// global $global_fh;
 		// Setup output dir first
-
 		if (!is_dir($this->dest_dir)) mkdir($this->dest_dir, 0777, true);
 		if (!is_dir($this->wp_expanded_dir)) mkdir($this->wp_expanded_dir);
 
 		$count_tarballs = count($this->downloaded_files['files']);
 		// Open output file
-		var_dump($this->downloaded_files);
 		foreach($this->downloaded_files['files'] as $i => $file) {
 			$cmd = "cd {$this->wp_expanded_dir} ; tar xvjf $file";
 			echo "$cmd\n";
 			printf("Unpacking %d of %d: %s\n", $i + 1, $count_tarballs, $cmd);
 			exec($cmd, $out, $ret);
-			// var_dump($out);
 		}
 
 		$sqldump = $this->downloaded_files['sql'][0];
 		$cmd = "cd {$this->dest_dir} ; bunzip2 $sqldump";
 		exec($cmd, $out, $ret);
-		// var_dump($out);
-
-
-		// $info = pathinfo($destination);
-		// $filename_prefix =  basename($destination,'.'.$info['extension']);
-		// $tar = "$filename_prefix.tar";
-		// $tar_fullpath = $dest_dir . DIRECTORY_SEPARATOR . $tar;
-
-		// $cmd1 = "cd $dest_dir; unzip " . $this->zip_filename;
-		// echo $cmd1 . "\n";
-		// echo shell_exec($cmd1);
-
-		// if(file_exists($tar_fullpath)) {
-		// 	$cmd2 = "cd $wp_expanded_dir; tar xvf $tar_fullpath";
-		// 	echo $cmd2 . "\n";
-		// 	echo shell_exec($cmd2);
 
 		 	$to_delete_list_file = $this->wp_expanded_dir . DIRECTORY_SEPARATOR .'wp-content/uploads/'. FILE_LIST_TO_DELETE;
 echo $to_delete_list_file . "\n";
