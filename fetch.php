@@ -23,7 +23,7 @@ require_once "vendor/autoload.php";
  * Client constants
  */
 define('BACKUP_ROOT', '/Volumes/Backup/Geek/Sites');
-define('WPIB_NUM_STEPS', 8);
+define('WPIB_NUM_STEPS', 9);
 define('WPIB_CLIENT_DEBUG_MODE', true);
 define('WPIB_CLIENT_DEBUG_LEN', 15);
 
@@ -587,6 +587,7 @@ class T1z_WP_Incremental_Backup_Client {
             $file = basename(array_shift($files));
             printf("  * %d/%d Téléchargement de l'archive ", $arc_idx, $this->num_archives);
             $this->download_and_check($site, $file, 'files');
+            printf("  * %d/%d Envoi vers Google Drive ", $arc_idx, $this->num_archives);
             $this->upload_to_google_drive($site, $file);
 
             // printf("%d/%d DONE with file %s\n", $arc_idx, $this->num_archives, $file);
@@ -597,7 +598,6 @@ class T1z_WP_Incremental_Backup_Client {
      * Upload file to Google Drive
      */
     private function upload_to_google_drive($site, $filename) {
-        // printf("Etape %d/%d - envoi des données d'identification : ", 2, WPIB_NUM_STEPS);
         // Fuck PHP, and I mean it!
         // http://stackoverflow.com/questions/5167313/php-problem-filesize-return-0-with-file-containing-few-data
         clearstatcache();
@@ -644,6 +644,7 @@ class T1z_WP_Incremental_Backup_Client {
         }
 
         fclose($handle);
+        echo "OK\n";
     }
 
     /**
@@ -702,6 +703,8 @@ class T1z_WP_Incremental_Backup_Client {
                 $this->step_idx++;
                 $sql_file = $parsed_response->files[0];
                 $this->download_and_check($site, $sql_file, 'sql');
+                printf("Etape %d/%d - Base de données : envoi de la copie vers Google Drive ", $this->step_idx, WPIB_NUM_STEPS);
+                $this->step_idx++;
                 $this->upload_to_google_drive($site, $sql_file);
             }
         }
