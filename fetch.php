@@ -69,12 +69,13 @@ function get_client() {
     // Load previously authorized credentials from a file.
     $credentialsPath = expand_home_directory(CREDENTIALS_PATH);
     if (file_exists($credentialsPath)) {
+        printf("Récupération des autorisations Google Drive depuis le fichier %s\n", $credentialsPath);
         $accessToken = file_get_contents($credentialsPath);
     } else {
         // Request authorization from the user.
         $authUrl = $client->createAuthUrl();
-        printf("Open the following link in your browser:\n%s\n", $authUrl);
-        print 'Enter verification code: ';
+        printf("Copiez-collez ce lien dans votre navigateur, puis autorisez l'application à accéder au Drive :\n%s\n", $authUrl);
+        print 'Entrez le code de vérification donné sur la page web : ';
         $authCode = trim(fgets(STDIN));
 
         // Exchange authorization code for an access token.
@@ -85,15 +86,17 @@ function get_client() {
             mkdir(dirname($credentialsPath), 0700, true);
         }
         file_put_contents($credentialsPath, json_encode($accessToken));
-        printf("Credentials saved to %s\n", $credentialsPath);
+        printf("Autorisations sauvegardées dans le fichier %s\n", $credentialsPath);
     }
-    var_dump($accessToken);
     $client->setAccessToken($accessToken);
 
     // Refresh the token if it's expired.
     if ($client->isAccessTokenExpired()) {
-        $client->refreshToken($client->getRefreshToken());
-        file_put_contents($credentialsPath, json_encode($client->getAccessToken()));
+        $refreshToken = $client->getRefreshToken();
+        $client->refreshToken($refreshToken);
+        $fullToken = $client->getAccessToken();
+        $fullToken['refresh_token'] = $refreshToken;
+        file_put_contents($credentialsPath, json_encode($fullToken));
     }
     return $client;
 }
